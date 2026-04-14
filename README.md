@@ -1,0 +1,1 @@
+# vegetation_drought_resilience
