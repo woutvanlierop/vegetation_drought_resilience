@@ -271,8 +271,14 @@ pip install -e .
 
 ### Running Pipeline
 ```bash
-# Fetch data + compute drought for July 2023
-python -m src.data.fetchers --start 2023-07-01 --end 2023-07-31
+# Install package in development mode
+pip install -e .
+
+# Fetch data for July 2023 (Phase 2)
+vegetation-drought-resilience fetch-data 2023-07-01 2023-07-31
+
+# Or run directly with Python
+python -m src.cli fetch-data 2023-07-01 2023-07-31
 
 # Launch dashboard
 streamlit run app/main.py

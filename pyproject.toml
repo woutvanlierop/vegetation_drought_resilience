@@ -66,6 +66,9 @@ docs = [
     "sphinx-autodoc-typehints>=1.23.0",
 ]
 
+[project.scripts]
+vegetation-drought-resilience = "src.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/yourusername/vegetation_drought_resilience"
 Documentation = "https://github.com/yourusername/vegetation_drought_resilience/tree/main/docs"

@@ -19,8 +19,9 @@ from loguru import logger
 
 def authenticate_openeo(
     backend_url: str,
-    username: str,
-    password: str,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    provider_id: Optional[str] = None
 ) -> openeo.Connection:
     """
     Authenticate with OpenEO backend.
@@ -29,42 +30,81 @@ def authenticate_openeo(
         backend_url: OpenEO backend URL (e.g., https://openeo.creo.vito.be/openeo/1.1.0)
         username: OpenEO username
         password: OpenEO password
+        client_id: OpenEO OIDC client ID
+        client_secret: OpenEO OIDC client secret
+        provider_id: OpenEO OIDC provider ID
+        auth_method: Authentication method to use (basic, client_credentials, resource_owner, auto)
 
     Returns:
         Authenticated openeo.Connection object
 
     Raises:
         Exception: If authentication fails
-
-    Example:
-        >>> conn = authenticate_openeo(
-        ...     backend_url="https://openeo.creo.vito.be/openeo/1.1.0",
-        ...     username="user@example.com",
-        ...     password="password"
-        ... )
     """
+    connection = openeo.connect(backend_url)
     try:
-        connection = openeo.connect(backend_url)
-        connection.authenticate_basic(username, password)
-        logger.info(f"Authenticated with OpenEO backend: {backend_url}")
+        connection.authenticate_oidc_client_credentials(
+                client_id=client_id,
+                client_secret=client_secret,
+                provider_id=provider_id,
+            )
+        logger.info("Authenticated with OpenEO backend: %s", backend_url)
         return connection
     except Exception as e:
         logger.error(f"Failed to authenticate with OpenEO: {e}")
         raise
 
 
+def _build_spatial_extent(roi: list) -> dict:
+    """Build an OpenEO-compatible spatial extent from ROI bounds."""
+    if len(roi) != 4:
+        raise ValueError("ROI must be [west, south, east, north]")
+    return {"west": roi[0], "south": roi[1], "east": roi[2], "north": roi[3]}
+
+
+def _normalize_band_list(bands: Optional[list]) -> Optional[list]:
+    """Normalize band or variable lists for OpenEO load_collection."""
+    if bands is None:
+        return None
+
+    legacy_band_map = {
+        "B2": "B02",
+        "B3": "B03",
+        "B4": "B04",
+        "B5": "B05",
+        "B6": "B06",
+        "B7": "B07",
+        "B8": "B08",
+        "B8A": "B8A",
+        "B11": "B11",
+        "B12": "B12",
+        "SCL": "SCL",
+    }
+
+    normalized = []
+    for band in bands:
+        if not isinstance(band, str):
+            continue
+        band_name = band.strip().upper()
+        normalized.append(legacy_band_map.get(band_name, band_name))
+
+    return normalized
+
+
 def fetch_sentinel2(
     backend_url: str,
-    username: str,
-    password: str,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    provider_id: Optional[str],
     roi: list,
     start_date: str,
     end_date: str,
     max_cloud_cover: int = 20,
     bands: Optional[list] = None,
+    collection_id: str = "SENTINEL2_L2A",
 ) -> openeo.DataCube:
     """
-    Fetch Sentinel-2 imagery from OpenEO backend.
+    Fetch Sentinel-2 imagery from an OpenEO backend.
 
     Args:
         backend_url: OpenEO backend URL
@@ -74,39 +114,53 @@ def fetch_sentinel2(
         start_date: Start date in 'YYYY-MM-DD' format
         end_date: End date in 'YYYY-MM-DD' format
         max_cloud_cover: Maximum allowed cloud cover percentage (default 20)
-        bands: List of band names to select (default: all S2 bands)
+        bands: List of band names to select (default: None / all available)
+        collection_id: OpenEO collection identifier for Sentinel-2 data
 
     Returns:
         openeo.DataCube with Sentinel-2 scenes
-
-    Example:
-        >>> roi = [2.754, 50.674, 5.918, 51.507]  # Flanders bbox
-        >>> s2 = fetch_sentinel2(
-        ...     backend_url, username, password,
-        ...     roi, '2023-07-01', '2023-07-31'
-        ... )
     """
-    # TODO: Implement OpenEO Sentinel-2 collection fetch
-    # - Authenticate with backend
-    # - Create bbox from roi
-    # - Load Sentinel-2 L2A collection
-    # - Filter by date range and cloud cover (using SCL band)
-    # - Select bands
-    # - Return DataCube
-    pass
+    connection = authenticate_openeo(
+        backend_url=backend_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        provider_id=provider_id)
+    spatial_extent = _build_spatial_extent(roi)
+    selected_bands = _normalize_band_list(bands)
+
+    try:
+        cube = connection.load_collection(
+            collection_id=collection_id,
+            spatial_extent=spatial_extent,
+            temporal_extent=[start_date, end_date],
+            bands=selected_bands,
+            max_cloud_cover=max_cloud_cover,
+        )
+        logger.info(
+            "Loaded Sentinel-2 collection %s for %s to %s",
+            collection_id,
+            start_date,
+            end_date,
+        )
+        return cube
+    except Exception as e:
+        logger.error("Failed to load Sentinel-2 collection %s: %s", collection_id, e)
+        raise
 
 
 def fetch_era5_daily(
     backend_url: str,
-    username: str,
-    password: str,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    provider_id: Optional[str],
     roi: list,
     start_date: str,
     end_date: str,
     variables: Optional[list] = None,
+    collection_id: str = "ERA5",
 ) -> openeo.DataCube:
     """
-    Fetch ERA5 daily weather data from OpenEO backend.
+    Fetch ERA5 daily weather data from an OpenEO backend.
 
     Args:
         backend_url: OpenEO backend URL
@@ -117,23 +171,37 @@ def fetch_era5_daily(
         end_date: End date in 'YYYY-MM-DD' format
         variables: List of variable names to fetch
             (e.g., 'temperature_2m', 'total_precipitation_sum')
+        collection_id: OpenEO collection identifier for ERA5 climate data
 
     Returns:
         openeo.DataCube with ERA5 daily climate variables
-
-    Example:
-        >>> era5 = fetch_era5_daily(
-        ...     backend_url, username, password,
-        ...     roi, '2023-07-01', '2023-07-31'
-        ... )
     """
-    # TODO: Implement ERA5 data fetch via OpenEO
-    # - Authenticate
-    # - Load ERA5 collection
-    # - Filter by date range, spatial extent
-    # - Select variables
-    # - Return DataCube
-    pass
+    connection = authenticate_openeo(
+        backend_url=backend_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        provider_id=provider_id,
+    )
+    spatial_extent = _build_spatial_extent(roi)
+    selected_variables = _normalize_band_list(variables)
+
+    try:
+        cube = connection.load_collection(
+            collection_id=collection_id,
+            spatial_extent=spatial_extent,
+            temporal_extent=[start_date, end_date],
+            bands=selected_variables,
+        )
+        logger.info(
+            "Loaded ERA5 collection %s for %s to %s",
+            collection_id,
+            start_date,
+            end_date,
+        )
+        return cube
+    except Exception as e:
+        logger.error("Failed to load ERA5 collection %s: %s", collection_id, e)
+        raise
 
 
 def download_to_netcdf(
@@ -151,16 +219,22 @@ def download_to_netcdf(
 
     Returns:
         Path to downloaded file
-
-    Note:
-        Uses synchronous download (download_result())
     """
-    # TODO: Implement OpenEO download to NetCDF
-    # - Prepare output format options
-    # - Execute synchronous download
-    # - Validate output
-    # - Return file path
-    pass
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        datacube.download(outputfile=output_path, format=format)
+        logger.info("Downloaded OpenEO result to %s", output_path)
+        return str(output_path)
+    except Exception as e:
+        logger.error(
+            "Failed to download OpenEO result to %s with format %s: %s",
+            output_path,
+            format,
+            e,
+        )
+        raise
 
 
 def download_to_geotiff(
@@ -177,5 +251,13 @@ def download_to_geotiff(
     Returns:
         Path to downloaded file
     """
-    # TODO: Implement COG download
-    pass
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        datacube.download(outputfile=output_path, format="COG")
+        logger.info("Downloaded OpenEO result to %s", output_path)
+        return str(output_path)
+    except Exception as e:
+        logger.error("Failed to download OpenEO COG to %s: %s", output_path, e)
+        raise

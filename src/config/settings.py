@@ -22,8 +22,14 @@ class Settings(BaseSettings):
     # OpenEO Backend Configuration
     OPENEO_BACKEND_URL: str = "https://openeo.creo.vito.be/openeo/1.1.0"
     OPENEO_BACKEND_NAME: str = "Vito"
-    OPENEO_USERNAME: str
-    OPENEO_PASSWORD: str
+    OPENEO_USERNAME: Optional[str] = "your-eodc-username"
+    OPENEO_PASSWORD: Optional[str] = "your-eodc-password"
+    OPENEO_SENTINEL2_COLLECTION_ID: str = "SENTINEL2_L2A"
+    OPENEO_ERA5_COLLECTION_ID: str = "ERA5"
+    OPENEO_AUTH_METHOD: str = "auto"
+    OPENEO_CLIENT_ID: Optional[str] = None
+    OPENEO_CLIENT_SECRET: Optional[str] = None
+    OPENEO_AUTH_PROVIDER_ID: Optional[str] = None
 
     # PostgreSQL + PostGIS Database
     DB_HOST: str = "localhost"
@@ -60,7 +66,7 @@ class Settings(BaseSettings):
 
     @property
     def ROI_BBOX_LIST(self) -> list:
-        """Return ROI as [west, south, east, north] for GEE."""
+        """Return ROI as [west, south, east, north] for OpenEO spatial_extent."""
         return [self.ROI_WEST, self.ROI_SOUTH, self.ROI_EAST, self.ROI_NORTH]
 
     # Data Directories
@@ -177,7 +183,7 @@ class Settings(BaseSettings):
 
         env_file = ".env"
         env_file_encoding = "utf-8"
-        case_sensitive = True
+        case_sensitive = False
         extra = "ignore"
 
 

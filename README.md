@@ -74,6 +74,36 @@ This project combines:
    \q
    ```
 
+### Running the Pipeline
+
+#### Phase 2: Data Fetching
+
+Fetch Sentinel-2 and ERA5 data for a specific time period:
+
+```bash
+# Install the package in development mode
+pip install -e .
+
+# Fetch data for July 2023 (default ROI: Flanders)
+vegetation-drought-resilience fetch-data 2023-07-01 2023-07-31
+
+# Or run directly with Python
+python -m src.cli fetch-data 2023-07-01 2023-07-31
+
+# Or use convenience scripts
+./run_phase2.sh 2023-07-01 2023-07-31  # Unix/Linux/macOS
+run_phase2.bat 2023-07-01 2023-07-31   # Windows
+
+# Dry run to see what would be downloaded
+vegetation-drought-resilience fetch-data 2023-07-01 2023-07-31 --dry-run
+
+# Custom ROI and output directory
+vegetation-drought-resilience fetch-data 2023-07-01 2023-07-31 \
+  --roi 2.5 50.5 6.0 51.5 \
+  --output-dir ./custom_data \
+  --max-cloud-cover 10
+```
+
 ### Running the Dashboard
 
 ```bash
