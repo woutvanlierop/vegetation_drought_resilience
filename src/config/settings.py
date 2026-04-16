@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     OPENEO_CLIENT_SECRET: Optional[str] = None
     OPENEO_AUTH_PROVIDER_ID: Optional[str] = None
 
+    # Alternative backends for different data types
+    OPENEO_SENTINEL2_BACKEND_URL: Optional[str] = None  # If different from main backend
+    OPENEO_ERA5_BACKEND_URL: Optional[str] = None  # If different from main backend
+
     # PostgreSQL + PostGIS Database
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
@@ -116,7 +120,7 @@ class Settings(BaseSettings):
 
     # Sentinel-2 Parameters (via OpenEO)
     SENTINEL2_MAX_CLOUD_COVER: int = 20
-    SENTINEL2_BANDS: str | list[str] = Field(
+    SENTINEL2_BANDS: list[str] = Field(
         default=[
             "B02",  # Blue (10m)
             "B03",  # Green (10m)
@@ -134,7 +138,7 @@ class Settings(BaseSettings):
     SENTINEL2_RESOLUTION: int = 10  # 10m native resolution
 
     # ERA5 Parameters
-    ERA5_VARIABLES: str | list[str] = Field(
+    ERA5_VARIABLES: list[str] = Field(
         default=[
             "temperature_2m",
             "total_precipitation_sum",
@@ -150,8 +154,14 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         if isinstance(v, (list, tuple)):
             return list(v)
-        return v
+        return list(v)
+
     ERA5_RESOLUTION_METERS: int = 25000  # ~25 km
+
+    # CDS API Configuration (for ERA5 data access)
+    CDS_API_URL: str = "https://cds.climate.copernicus.eu/api/v2"
+    CDS_API_KEY: Optional[str] = None  # Format: UID:API_KEY from CDS account
+    ERA5_USE_CDSAPI: bool = False  # Use CDS API instead of OpenEO for ERA5
 
     # Drought Index Thresholds
     DROUGHT_SEVERITY_THRESHOLDS: dict = {

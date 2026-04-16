@@ -6,12 +6,15 @@ Supports multiple backends:
 - EODC (https://openeo.creo.vito.be) — European Open Data Cube
 - CDSE (https://openeo.dataspace.copernicus.eu) — Copernicus Data Space Ecosystem (free)
 - Sentinel Hub
+- CDS API (https://cds.climate.copernicus.eu) — Copernicus Climate Data Store for ERA5
 """
 
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
+import cdsapi
 import openeo
 import xarray as xr
 from loguru import logger
@@ -48,7 +51,7 @@ def authenticate_openeo(
                 client_secret=client_secret,
                 provider_id=provider_id,
             )
-        logger.info("Authenticated with OpenEO backend: %s", backend_url)
+        logger.info("Authenticated with OpenEO backend: {}", backend_url)
         return connection
     except Exception as e:
         logger.error(f"Failed to authenticate with OpenEO: {e}")
@@ -96,6 +99,7 @@ def fetch_sentinel2(
     client_id: Optional[str],
     client_secret: Optional[str],
     provider_id: Optional[str],
+    auth_method: str,
     roi: list,
     start_date: str,
     end_date: str,
@@ -137,14 +141,14 @@ def fetch_sentinel2(
             max_cloud_cover=max_cloud_cover,
         )
         logger.info(
-            "Loaded Sentinel-2 collection %s for %s to %s",
+            "Loaded Sentinel-2 collection {} for {} to {}",
             collection_id,
             start_date,
             end_date,
         )
         return cube
     except Exception as e:
-        logger.error("Failed to load Sentinel-2 collection %s: %s", collection_id, e)
+        logger.error("Failed to load Sentinel-2 collection {}: {}", collection_id, e)
         raise
 
 
@@ -153,6 +157,7 @@ def fetch_era5_daily(
     client_id: Optional[str],
     client_secret: Optional[str],
     provider_id: Optional[str],
+    auth_method: str,
     roi: list,
     start_date: str,
     end_date: str,
@@ -193,14 +198,14 @@ def fetch_era5_daily(
             bands=selected_variables,
         )
         logger.info(
-            "Loaded ERA5 collection %s for %s to %s",
+            "Loaded ERA5 collection {} for {} to {}",
             collection_id,
             start_date,
             end_date,
         )
         return cube
     except Exception as e:
-        logger.error("Failed to load ERA5 collection %s: %s", collection_id, e)
+        logger.error("Failed to load ERA5 collection {}: {}", collection_id, e)
         raise
 
 
@@ -208,33 +213,49 @@ def download_to_netcdf(
     datacube: openeo.DataCube,
     output_file: str,
     format: str = "netcdf",
+    max_retries: int = 3,
 ) -> str:
     """
-    Download OpenEO DataCube to NetCDF file.
+    Download OpenEO DataCube to a local file.
 
     Args:
         datacube: openeo.DataCube to download
         output_file: Output file path
         format: Output format ('netcdf', 'GeoTIFF', 'COG', etc.)
+        max_retries: Number of retry attempts for transient backend errors
 
     Returns:
         Path to downloaded file
     """
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    transient_codes = {"502", "503", "504"}
 
-    try:
-        datacube.download(outputfile=output_path, format=format)
-        logger.info("Downloaded OpenEO result to %s", output_path)
-        return str(output_path)
-    except Exception as e:
-        logger.error(
-            "Failed to download OpenEO result to %s with format %s: %s",
-            output_path,
-            format,
-            e,
-        )
-        raise
+    for attempt in range(1, max_retries + 1):
+        try:
+            datacube.download(outputfile=output_path, format=format)
+            logger.info("Downloaded OpenEO result to {}", output_path)
+            return str(output_path)
+        except Exception as e:
+            error_text = str(e)
+            if attempt < max_retries and any(code in error_text for code in transient_codes):
+                logger.warning(
+                    "Transient OpenEO error on attempt {}/{}: {}. Retrying...",
+                    attempt,
+                    max_retries,
+                    e,
+                )
+                time.sleep(2 ** (attempt - 1))
+                continue
+
+            logger.error(
+                "Failed to download OpenEO result to {} with format {}: {}",
+                output_path,
+                format,
+                e,
+            )
+            raise
+    raise RuntimeError(f"Exceeded maximum retries ({max_retries}) for downloading OpenEO result to {output_path}")
 
 
 def download_to_geotiff(
@@ -256,8 +277,118 @@ def download_to_geotiff(
 
     try:
         datacube.download(outputfile=output_path, format="COG")
-        logger.info("Downloaded OpenEO result to %s", output_path)
+        logger.info("Downloaded OpenEO result to {}", output_path)
         return str(output_path)
     except Exception as e:
-        logger.error("Failed to download OpenEO COG to %s: %s", output_path, e)
+        logger.error("Failed to download OpenEO COG to {}: {}", output_path, e)
+        raise
+
+
+def fetch_era5_cds_api(
+    api_url: str,
+    api_key: str,
+    roi: list,
+    start_date: str,
+    end_date: str,
+    variables: Optional[list] = None,
+    output_file: str = "era5.nc",
+) -> str:
+    """
+    Fetch ERA5 data from Copernicus Climate Data Store (CDS) API.
+
+    Args:
+        api_url: CDS API URL (default: https://cds.climate.copernicus.eu/api/v2)
+        api_key: CDS API key in format "UID:API_KEY"
+        roi: Region of interest as [west, south, east, north]
+        start_date: Start date in 'YYYY-MM-DD' format
+        end_date: End date in 'YYYY-MM-DD' format
+        variables: List of variable names to fetch (ERA5 variable names)
+        output_file: Output file path for NetCDF
+
+    Returns:
+        Path to downloaded ERA5 file
+    """
+    if not api_key:
+        raise ValueError(
+            "CDS_API_KEY not configured. "
+            "Get API key from https://cds.climate.copernicus.eu/user/login and "
+            "set in environment as CDS_API_KEY=UID:API_KEY"
+        )
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Default ERA5 variables
+    if variables is None:
+        variables = [
+            "2m_temperature",
+            "total_precipitation",
+            "volumetric_soil_water_layer_1",
+            "volumetric_soil_water_layer_2",
+        ]
+
+    # Map common names to CDS variable names
+    variable_mapping = {
+        "temperature_2m": "2m_temperature",
+        "total_precipitation_sum": "total_precipitation",
+        "volumetric_soil_water_layer_1": "volumetric_soil_water_layer_1",
+        "volumetric_soil_water_layer_2": "volumetric_soil_water_layer_2",
+    }
+
+    # Translate variable names if needed
+    era5_variables = []
+    for var in variables:
+        era5_variables.append(variable_mapping.get(var, var))
+
+    try:
+        # Initialize CDS client
+        client = cdsapi.Client(
+            url=api_url,
+            key=api_key,
+            quiet=False,
+            debug=False,
+        )
+
+        # Parse dates
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+        # CDS API expects bounding box as [north, west, south, east]
+        north, west, south, east = roi[3], roi[0], roi[1], roi[2]
+
+        logger.info(
+            "Requesting ERA5 data from CDS API for ROI: N={}, S={}, E={}, W={}, dates {} to {}",
+            north,
+            south,
+            east,
+            west,
+            start_date,
+            end_date,
+        )
+
+        # Request ERA5 reanalysis data
+        client.retrieve(
+            "reanalysis-era5-single-levels-monthly-means",
+            {
+                "product_type": "monthly_averaged_reanalysis",
+                "variable": era5_variables,
+                "year": [str(y) for y in range(start_dt.year, end_dt.year + 1)],
+                "month": [f"{m:02d}" for m in range(1, 13)],
+                "time": "00:00",
+                "area": [north, west, south, east],
+                "format": "netcdf",
+            },
+            str(output_path),
+        )
+
+        logger.info("Downloaded ERA5 data from CDS API to {}", output_path)
+        return str(output_path)
+
+    except Exception as e:
+        logger.error(
+            "Failed to download ERA5 data from CDS API to {} with variables {}: {}",
+            output_path,
+            variables,
+            e,
+        )
         raise
